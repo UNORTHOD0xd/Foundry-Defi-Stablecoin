@@ -54,6 +54,7 @@ contract DSCEngine is ReentrancyGuard {
     /////////// STATE VARIABLES ////////
     mapping(address token => address priceFeed) private s_priceFeeds;
     mapping (address user => mapping(address token => uint256 amount)) private s_collateralDeposited;
+    mapping (address user => uint256 amountDSCMinted) private s_DSCMinted;
 
     DecentralizedStableCoin private immutable I_DSC;
 
@@ -105,7 +106,6 @@ contract DSCEngine is ReentrancyGuard {
      * - The caller must have approved the DSCEngine contract to spend the specified amount of collateral.
      * - The collateral must be sufficient to cover the minted DSC based on the required collateralization ratio.
      * Emits a {CollateralDeposited} event.
-     * Emits a {DSCMinted} event.
      */
     function depositCollateral(
         address tokenCollateralAddress, 
@@ -128,11 +128,43 @@ contract DSCEngine is ReentrancyGuard {
 
     function redeemCollateral() external {}
 
-    function mintDSC() external {}
+    /** Notice: This function allows users to mint DSC by providing collateral.
+     * Notice: Follows CEI (Checks-Effects-Interactions) pattern to prevent reentrancy attacks.
+     * @param amountDSCToMint The amount of DSC to be minted.
+     * @dev Requirements:
+     * - The caller must have sufficient collateral deposited to cover the minted DSC based on the required collateralization ratio.
+     * - The caller must not exceed the maximum mintable DSC based on their collateral.
+     * Emits a {DSCMinted} event.
+     */
+    function mintDSC(uint256 amountDSCToMint) external moreThanZero(amountDSCToMint) {
+        s_DSCMinted[msg.sender] += amountDSCToMint;
+        // check health factor
+        // revert if not healthy
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function burnDSC() external {}
 
     function liquidate() external {}
 
     function getHealthFactor() external view {}
+
+
+    ///////// PRIVATE & INTERNAL FUNCTIONS /////////
+
+    /** Notice: This function checks the health factor of a user.
+     * @param user The address of the user to check.
+     * @return bool True if the user's health factor is above the minimum threshold, false otherwise.
+     * @dev The health factor is calculated based on the user's collateral and minted DSC.
+     * A health factor below 1 indicates that the user's position is under-collateralized and may be subject to liquidation.
+     */
+    function _checkHealthFactor(address user) private view returns (bool) {
+        // check health factor
+        return true;
+    }
+
+    function _revertIfHealthFactorIsBroken(address user) internal view {
+        // check health factor
+        // revert if not healthy
+    }
 }
