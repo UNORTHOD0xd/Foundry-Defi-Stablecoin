@@ -61,7 +61,7 @@ contract DSCEngine is ReentrancyGuard {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% overcollateralization
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant MIN_HEALTH_FACTOR = 1;
 
     mapping(address token => address priceFeed) private s_priceFeeds;
     mapping (address user => mapping(address token => uint256 amount)) private s_collateralDeposited;
@@ -219,7 +219,7 @@ contract DSCEngine is ReentrancyGuard {
      * @notice Calculates the health factor for a given user's position
      * @param user The address of the user whose health factor to calculate
      * @return healthFactor The calculated health factor with 18 decimal precision
-     * @dev Health factor = (collateralValueInUsd * LIQUIDATION_THRESHOLD / 100) / totalDSCMinted
+     * @dev Health factor = (collateralValueInUsd * LIQUIDATION_THRESHOLD * PRECISION) / (LIQUIDATION_PRECISION * totalDSCMinted)
      * @dev A health factor below 1e18 (1.0) indicates an undercollateralized position eligible for liquidation
      * @dev A health factor of 1e18 means exactly at the liquidation threshold (e.g., 50% for 200% collateral ratio)
      * @dev Health factor above 1e18 indicates a healthy, overcollateralized position
@@ -227,7 +227,9 @@ contract DSCEngine is ReentrancyGuard {
      */
     function _calculateHealthFactor(address user) private view returns (uint256) {
         (uint256 totalDSCMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
-        return _calculateHealthFactor(totalDSCMinted, collateralValueInUsd);
+        if (totalDSCMinted == 0) return type(uint256).max;
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return (collateralAdjustedForThreshold * PRECISION) / totalDSCMinted;
     }
 
     /**
