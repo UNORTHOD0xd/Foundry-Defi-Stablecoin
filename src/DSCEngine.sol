@@ -74,6 +74,7 @@ contract DSCEngine is ReentrancyGuard {
     //                                  EVENTS                                   //
     ///////////////////////////////////////////////////////////////////////////////
     event CollateralDeposited(address indexed user, address indexed tokenCollateralAddress, uint256 amountCollateral);
+    event CollateralRedeemed(address indexed user, address indexed token, uint256 indexed amount);
 
     ///////////////////////////////////////////////////////////////////////////////
     //                                MODIFIERS                                  //
@@ -190,9 +191,49 @@ contract DSCEngine is ReentrancyGuard {
         }
     }
 
-    function redeemCollateralForDSC() external {}
+    /**
+     * @notice Burns DSC tokens and redeems collateral in a single transaction
+     * @param tokenCollateralAddress The ERC20 token address of the collateral to redeem
+     * @param amountCollateral The amount of collateral tokens to redeem
+     * @param amountDscToBurn The amount of DSC tokens to burn (in wei, 18 decimals)
+     * @dev This is a convenience function that combines burnDSC() and redeemCollateral() operations
+     * @dev Burns DSC first to improve health factor before withdrawing collateral
+     * @dev The caller must have approved this contract to spend at least `amountDscToBurn` DSC tokens
+     * @dev The caller must have at least `amountCollateral` of the specified collateral deposited
+     * Emits a {CollateralRedeemed} event upon successful collateral redemption
+     */
+    function redeemCollateralForDSC(address tokenCollateralAddress, uint256 amountCollateral,
+    uint256 amountDscToBurn)
+    external
+    {
+        burnDSC(amountDscToBurn);
+        redeemCollateral(tokenCollateralAddress, amountCollateral);
+        // redeem collateral already checks health factor
+    }
 
-    function redeemCollateral() external {}
+    /**
+     * @notice Allows users to redeem (withdraw) their deposited collateral tokens
+     * @param tokenCollateralAddress The ERC20 token address of the collateral to redeem
+     * @param amountCollateral The amount of collateral tokens to withdraw
+     * @dev This function allows users to withdraw collateral while maintaining system health
+     * @dev The user must have at least `amountCollateral` of the specified token deposited
+     * @dev The health factor is checked after withdrawal to ensure position remains overcollateralized
+     * @dev Protected against reentrancy attacks via nonReentrant modifier
+     * Emits a {CollateralRedeemed} event upon successful withdrawal
+     */
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral) public
+    moreThanZero(amountCollateral)
+    nonReentrant
+    {
+        s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
+
+        bool success = IERC20(tokenCollateralAddress).transfer(msg.sender, amountCollateral);
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /**
      * @notice Mints DSC (Decentralized Stablecoin) tokens to the caller's address
@@ -203,7 +244,8 @@ contract DSCEngine is ReentrancyGuard {
      * @dev Reverts with DSCEngine__NeedsMoreThanZero if amountDSCToMint is 0
      * @dev Reverts if the health factor breaks after minting (undercollateralized position)
      */
-    function mintDSC(uint256 amountDSCToMint) public moreThanZero(amountDSCToMint) nonReentrant {
+    function mintDSC(uint256 amountDSCToMint) public moreThanZero(amountDSCToMint) nonReentrant 
+    {
         s_DSCMinted[msg.sender] += amountDSCToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
         bool minted = I_DSC.mint(msg.sender, amountDSCToMint);
@@ -212,7 +254,23 @@ contract DSCEngine is ReentrancyGuard {
         }
     }
 
-    function burnDSC() external {}
+    /**
+     * @notice Burns (destroys) DSC tokens to reduce the caller's debt position
+     * @param amount The amount of DSC tokens to burn (in wei, 18 decimals)
+     * @dev This function allows users to burn DSC tokens they have minted to reduce their debt
+     * @dev The caller must have at least `amount` DSC tokens minted via this contract
+     * @dev The caller must have approved this contract to spend at least `amount` DSC tokens
+     * @dev Burning DSC improves the user's health factor by reducing their debt
+     */
+    function burnDSC(uint256 amount) public moreThanZero(amount) {
+        s_DSCMinted[msg.sender] -= amount;
+        bool success = I_DSC.transferFrom(msg.sender, address(this), amount);
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+        I_DSC.burn(amount);
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function liquidate() external {}
 
