@@ -264,7 +264,8 @@ contract DSCEngine is ReentrancyGuard {
      * @dev The caller must have approved this contract to spend at least `amount` DSC tokens
      * @dev Burning DSC improves the user's health factor by reducing their debt
      */
-    function burnDSC(uint256 amount) public moreThanZero(amount) {
+    function burnDSC(uint256 amount) public moreThanZero(amount) 
+    {
         _burnDSC(amount, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender);
     }
@@ -418,7 +419,8 @@ contract DSCEngine is ReentrancyGuard {
      * @dev Health factor above 1e18 indicates a healthy, overcollateralized position
      * @dev Returns type(uint256).max if no DSC has been minted (infinite health factor)
      */
-    function _calculateHealthFactor(address user) private view returns (uint256) {
+    function _calculateHealthFactor(address user) private view returns (uint256) 
+    {
         (uint256 totalDSCMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
         if (totalDSCMinted == 0) return type(uint256).max;
         uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
@@ -449,7 +451,8 @@ contract DSCEngine is ReentrancyGuard {
      * @dev Reverts with DSCEngine__BreaksHealthFactor if the health factor is below the minimum
      * @dev This function is called after operations that could affect collateralization (minting, withdrawing)
      */
-    function _revertIfHealthFactorIsBroken(address user) internal view {
+    function _revertIfHealthFactorIsBroken(address user) internal view 
+    {
         uint256 userHealthFactor = _calculateHealthFactor(user);
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert DSCEngine__BreaksHealthFactor(userHealthFactor);
@@ -505,7 +508,8 @@ contract DSCEngine is ReentrancyGuard {
      * @dev Uses Chainlink price feeds to get current market prices for each collateral token
      * @dev Returns 0 if the user has no collateral deposited
      */
-    function getAccountCollateralValue(address user) public view returns(uint256 totalCollateralValueInUsd) {
+    function getAccountCollateralValue(address user) public view returns(uint256 totalCollateralValueInUsd) 
+    {
         for(uint256 i = 0; i < s_collateralTokens.length; i++){
             address token = s_collateralTokens[i];
             uint256 amount = s_collateralDeposited[user][token];
@@ -524,9 +528,27 @@ contract DSCEngine is ReentrancyGuard {
      * @dev Example: 1 ETH at $3500 -> Chainlink returns 3500e8 -> Result is 3500e18
      * @dev The final calculation is: (price * 1e10 * amount) / 1e18
      */
-    function getUsdValue(address token, uint256 amount) public view returns(uint256){
+    function getUsdValue(address token, uint256 amount) public view returns(uint256)
+    {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
         (,int256 price,,,) = priceFeed.latestRoundData();
         return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
+    }
+
+    /**
+     * @notice Retrieves comprehensive account information for a given user
+     * @param user The address of the user to query
+     * @return totalDscMinted The total amount of DSC tokens minted by the user (in wei, 18 decimals)
+     * @return collateralValueInUsd The total USD value of all collateral deposited by the user (18 decimals)
+     * @dev Public wrapper for the internal _getAccountInformation function to enable external queries
+     * @dev Useful for frontends, monitoring tools, and external contracts to check account status
+     * @dev Collateral value is calculated using current Chainlink oracle prices for all deposited tokens
+     */
+    function getAccountInformation(address user)
+    external
+    view
+    returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
+    {
+        (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
 }
