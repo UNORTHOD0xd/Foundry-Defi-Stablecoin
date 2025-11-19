@@ -15,6 +15,7 @@ contract DSCEngineTest is Test {
     DSCEngine dsce;
     HelperConfig config;
     address ethUsdPriceFeed;
+    address btcUsdPriceFeed;
     address weth;
 
     address public USER = makeAddr("user");
@@ -24,9 +25,37 @@ contract DSCEngineTest is Test {
     function setUp() public {
         deployer = new DeployDSC();
         (dsc, dsce, config) = deployer.run();
-        (ethUsdPriceFeed,, weth,,) = config.activeNetworkConfig();
+        (ethUsdPriceFeed,btcUsdPriceFeed, weth,,) = config.activeNetworkConfig();
 
         ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+    }
+
+    ////////////////////////////////////////
+    /////////// CONSTRUCTOR TESTS ///////////
+    ////////////////////////////////////////
+
+    function testRevertsIfTokenLengthDoesntMatchPriceFeeds() public {
+        address[] memory tokenAddresses = new address[](1);
+        address[] memory priceFeedAddresses = new address[](2);
+
+        tokenAddresses[0] = weth;
+        priceFeedAddresses[0] = ethUsdPriceFeed;
+        priceFeedAddresses[1] = btcUsdPriceFeed;
+
+        vm.expectRevert(DSCEngine.DSCEngine__TokenAndPriceFeedLengthMismatch.selector);
+        new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+    }
+
+    function testRevertsIfTokenLengthExceedsPriceFeedLength() public {
+        address[] memory tokenAddresses = new address[](2);
+        address[] memory priceFeedAddresses = new address[](1);
+
+        tokenAddresses[0] = weth;
+        tokenAddresses[1] = weth; // Using weth twice for simplicity
+        priceFeedAddresses[0] = ethUsdPriceFeed;
+
+        vm.expectRevert(DSCEngine.DSCEngine__TokenAndPriceFeedLengthMismatch.selector);
+        new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
     }
 
     ///////////////////////////////
