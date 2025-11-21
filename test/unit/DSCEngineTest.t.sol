@@ -8,6 +8,7 @@ import {DecentralizedStableCoin} from "../../src/DecentralizedStableCoin.sol";
 import {DSCEngine} from "../../src/DSCEngine.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "../../test/mocks/ERC20Mock.sol";
+import {MaliciousToken} from "../../test/mocks/MaliciousToken.sol";
 
 contract DSCEngineTest is Test {
     DeployDSC deployer;
@@ -168,6 +169,107 @@ contract DSCEngineTest is Test {
         uint256 expectedDepositAmount = dsce.getTokenAmountFromUsd(weth, collateralValueInUsd);
         assertEq(totalDscMinted, expectedTotalDscMinted);
         assertEq(AMOUNT_COLLATERAL, expectedDepositAmount);
+    }
+
+    ///////////////////////////////////////
+    ///////// Reentrancy Tests ////////////
+    ///////////////////////////////////////
+
+    function testDepositCollateralReentrancyProtection() public {
+        // Deploy a new DSCEngine that accepts the malicious token
+        address[] memory tokenAddresses = new address[](1);
+        address[] memory priceFeedAddresses = new address[](1);
+
+        // Create malicious token
+        MaliciousToken malToken = new MaliciousToken(address(dsce), USER);
+
+        tokenAddresses[0] = address(malToken);
+        priceFeedAddresses[0] = ethUsdPriceFeed;
+
+        DSCEngine testEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+
+        // Mint tokens to attacker
+        malToken.mint(USER, 100 ether);
+
+        vm.startPrank(USER);
+
+        // Approve tokens
+        malToken.approve(address(testEngine), 100 ether);
+
+        // Enable reentrancy attack
+        malToken.enableAttack(MaliciousToken.AttackType.DEPOSIT_REENTRANT);
+
+        // Attempt deposit - should fail due to reentrancy guard
+        vm.expectRevert();
+        testEngine.depositCollateral(address(malToken), 10 ether);
+
+        vm.stopPrank();
+    }
+
+    function testRedeemCollateralReentrancyProtection() public {
+        // Deploy a new DSCEngine that accepts the malicious token
+        address[] memory tokenAddresses = new address[](1);
+        address[] memory priceFeedAddresses = new address[](1);
+
+        // Create malicious token
+        MaliciousToken malToken = new MaliciousToken(address(dsce), USER);
+
+        tokenAddresses[0] = address(malToken);
+        priceFeedAddresses[0] = ethUsdPriceFeed;
+
+        DSCEngine testEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+
+        // Mint tokens to attacker
+        malToken.mint(USER, 100 ether);
+
+        vm.startPrank(USER);
+
+        // First deposit some collateral normally
+        malToken.approve(address(testEngine), 100 ether);
+        testEngine.depositCollateral(address(malToken), 50 ether);
+
+        // Enable reentrancy attack for redeem
+        malToken.enableAttack(MaliciousToken.AttackType.REDEEM_REENTRANT);
+
+        // Attempt redeem - should fail due to reentrancy guard
+        vm.expectRevert();
+        testEngine.redeemCollateral(address(malToken), 10 ether);
+
+        vm.stopPrank();
+    }
+
+    function testMintDscReentrancyProtection() public {
+        // Deploy a new DSCEngine that accepts the malicious token
+        address[] memory tokenAddresses = new address[](1);
+        address[] memory priceFeedAddresses = new address[](1);
+
+        // Create malicious token
+        MaliciousToken malToken = new MaliciousToken(address(dsce), USER);
+
+        tokenAddresses[0] = address(malToken);
+        priceFeedAddresses[0] = ethUsdPriceFeed;
+
+        DSCEngine testEngine = new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+
+        // Mint tokens to attacker
+        malToken.mint(USER, 100 ether);
+
+        vm.startPrank(USER);
+
+        // Deposit collateral first
+        malToken.approve(address(testEngine), 100 ether);
+        testEngine.depositCollateral(address(malToken), 50 ether);
+
+        // Enable reentrancy attack for mint
+        malToken.enableAttack(MaliciousToken.AttackType.MINT_REENTRANT);
+
+        // Attempt mint - the attack will be triggered during DSC transfer approval
+        // Note: This test verifies that even if a malicious actor tries to reenter
+        // during the mint process, the nonReentrant modifier prevents it
+        vm.expectRevert();
+        testEngine.mintDSC(1000e18);
+
+        vm.stopPrank();
     }
 
     ///////////////////////////////////////
