@@ -551,4 +551,31 @@ contract DSCEngine is ReentrancyGuard {
     {
         (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
+
+    /**
+     * @notice Returns the price feed address for a given collateral token
+     * @param token The address of the collateral token
+     * @return The address of the Chainlink price feed for the token
+     * @dev Returns address(0) if token is not supported as collateral
+     */
+    function getPriceFeed(address token) external view returns (address) {
+        return s_priceFeeds[token];
+    }
+
+    /**
+     * @notice Returns the array of all supported collateral token addresses
+     * @return Array of collateral token addresses
+     * @dev Useful for iterating through all supported collateral types
+     */
+    function getCollateralTokens() external view returns (address[] memory) {
+        return s_collateralTokens;
+    }
+
+    /**
+     * @notice Returns the address of the DSC token contract
+     * @return The address of the DecentralizedStableCoin contract
+     */
+    function getDsc() external view returns (address) {
+        return address(I_DSC);
+    }
 }

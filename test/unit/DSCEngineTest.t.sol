@@ -17,6 +17,7 @@ contract DSCEngineTest is Test {
     address ethUsdPriceFeed;
     address btcUsdPriceFeed;
     address weth;
+    address wbtc;
 
     address public USER = makeAddr("user");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
@@ -25,7 +26,7 @@ contract DSCEngineTest is Test {
     function setUp() public {
         deployer = new DeployDSC();
         (dsc, dsce, config) = deployer.run();
-        (ethUsdPriceFeed,btcUsdPriceFeed, weth,,) = config.activeNetworkConfig();
+        (ethUsdPriceFeed, btcUsdPriceFeed, weth, wbtc,) = config.activeNetworkConfig();
 
         ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
     }
@@ -56,6 +57,21 @@ contract DSCEngineTest is Test {
 
         vm.expectRevert(DSCEngine.DSCEngine__TokenAndPriceFeedLengthMismatch.selector);
         new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
+    }
+
+    function testConstructorInitializesStateMappingsCorrectly() public view {
+        // Verify price feed mappings are set correctly
+        assertEq(dsce.getPriceFeed(weth), ethUsdPriceFeed);
+        assertEq(dsce.getPriceFeed(wbtc), btcUsdPriceFeed);
+
+        // Verify collateral tokens array is populated correctly
+        address[] memory collateralTokens = dsce.getCollateralTokens();
+        assertEq(collateralTokens.length, 2);
+        assertEq(collateralTokens[0], weth);
+        assertEq(collateralTokens[1], wbtc);
+
+        // Verify DSC token address is stored correctly
+        assertEq(dsce.getDsc(), address(dsc));
     }
 
     ///////////////////////////////////////
