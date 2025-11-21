@@ -93,6 +93,44 @@ contract DSCEngineTest is Test {
         assertEq(expectedWeth, actualWeth);
     }
 
+    function testGetUsdValueWithZeroAmount() public view {
+        uint256 ethAmount = 0;
+        uint256 expectedUsd = 0;
+        uint256 actualUsd = dsce.getUsdValue(weth, ethAmount);
+        assertEq(expectedUsd, actualUsd);
+    }
+
+    function testGetUsdValueWithMaxAmount() public view {
+        // Use a large realistic amount to prevent overflow
+        // Max realistic ETH supply is ~120M ETH
+        uint256 ethAmount = 120_000_000e18;
+
+        // At $2000/ETH: 120M ETH * $2000 = $240B
+        uint256 expectedUsd = 240_000_000_000e18;
+        uint256 actualUsd = dsce.getUsdValue(weth, ethAmount);
+
+        assertEq(expectedUsd, actualUsd);
+    }
+
+    function testGetTokenAmountFromUsdWithZeroAmount() public view {
+        uint256 usdAmount = 0;
+        uint256 expectedWeth = 0;
+        uint256 actualWeth = dsce.getTokenAmountFromUsd(weth, usdAmount);
+        assertEq(expectedWeth, actualWeth);
+    }
+
+    function testGetTokenAmountFromUsdWithMaxAmount() public view {
+        // Test with very large USD amount
+        // $1 Trillion USD
+        uint256 usdAmount = 1_000_000_000_000e18;
+
+        // At $2000/ETH: $1T / $2000 = 500M ETH
+        uint256 expectedWeth = 500_000_000e18;
+        uint256 actualWeth = dsce.getTokenAmountFromUsd(weth, usdAmount);
+
+        assertEq(expectedWeth, actualWeth);
+    }
+
 
     ///////////////////////////////////////
     ////// Deposit Collateral Tests ///////
