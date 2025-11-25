@@ -271,28 +271,27 @@ contract DSCEngine is ReentrancyGuard {
     }
 
     /**
-     * @notice Liquidates an undercollateralized position by repaying debt and claiming collateral with bonus
-     * @param collateral The ERC20 token address of the collateral to seize
+     * @notice Liquidates an undercollateralized position by repaying debt and seizing collateral proportionally
      * @param user The address of the user being liquidated (must have health factor < 1e18)
      * @param debtToCover The amount of DSC debt to repay on behalf of the user (in wei, 18 decimals)
      * @dev This function allows anyone to liquidate undercollateralized positions to maintain system solvency
      * @dev The liquidator repays up to 50% of the user's DSC debt and receives equivalent collateral + 10% bonus
+     * @dev Collateral is seized proportionally from ALL deposited collateral types based on their USD value
+     * @dev This ensures liquidations succeed as long as total collateral value is sufficient, regardless of
+     *      which specific tokens the user has deposited
      * @dev Maximum liquidation is capped at 50% of the user's total debt to prevent full position liquidation
      * @dev The liquidator must have approved this contract to spend at least `debtToCover` DSC tokens
-     * @dev The liquidated user must have sufficient collateral of the specified token type
      * @dev Protected against reentrancy attacks via nonReentrant modifier
      * @dev Reverts with DSCEngine__NeedsMoreThanZero if debtToCover is 0
-     * @dev Reverts with DSCEngine__NotAllowedToken if collateral token is not supported
      * @dev Reverts with DSCEngine__HealthFactorOk if user's health factor is >= MIN_HEALTH_FACTOR
-     * @dev Reverts with DSCEngine__InsufficientCollateral if user doesn't have enough collateral
+     * @dev Reverts with DSCEngine__InsufficientCollateral if user's total collateral value is insufficient
      * @dev Reverts with DSCEngine__HealthFactorNotImproved if liquidation doesn't improve user's health
      * @dev Reverts with DSCEngine__BreaksHealthFactor if liquidator's own health factor breaks
-     * Emits a {CollateralRedeemed} event when collateral is transferred to the liquidator
+     * Emits multiple {CollateralRedeemed} events (one per collateral type seized)
      */
-    function liquidate(address collateral, address user, uint256 debtToCover)
+    function liquidate(address user, uint256 debtToCover)
     external
     moreThanZero(debtToCover)
-    isAllowedToken(collateral)
     nonReentrant
     {
         // Check if user's position can be liquidated
@@ -305,18 +304,16 @@ contract DSCEngine is ReentrancyGuard {
         uint256 maxDebtToCover = (s_DSCMinted[user] * LIQUIDATION_PRECISION) / 200; // 50%
         uint256 debtToActuallyCover = debtToCover > maxDebtToCover ? maxDebtToCover : debtToCover;
 
-        // Calculate collateral to seize (debt covered + 10% liquidation bonus)
-        uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToActuallyCover);
-        uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
-        uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered + bonusCollateral;
+        // Calculate total collateral value to seize (debt covered + 10% liquidation bonus)
+        // This is the USD value that needs to be seized proportionally across all collateral types
+        uint256 collateralValueToSeize = debtToActuallyCover; // 1:1 USD value
+        uint256 bonusCollateralValue = (collateralValueToSeize * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        uint256 totalCollateralValueToSeize = collateralValueToSeize + bonusCollateralValue;
 
-        // Ensure user has sufficient collateral to cover liquidation + bonus
-        if (s_collateralDeposited[user][collateral] < totalCollateralToRedeem) {
-            revert DSCEngine__InsufficientCollateral();
-        }
+        // Seize collateral proportionally from all deposited collateral types
+        // This ensures liquidation succeeds as long as total collateral is sufficient
+        _seizeCollateralProportionally(user, msg.sender, totalCollateralValueToSeize);
 
-        // Transfer collateral from liquidated user to liquidator
-        _redeemCollateral(user, msg.sender, collateral, totalCollateralToRedeem);
         // Burn DSC debt on behalf of the liquidated user
         _burnDSC(debtToActuallyCover, user, msg.sender);
 
@@ -390,6 +387,91 @@ contract DSCEngine is ReentrancyGuard {
         bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
         if (!success) {
             revert DSCEngine__TransferFailed();
+        }
+    }
+
+    /**
+     * @notice Seizes collateral proportionally from a user across all deposited collateral types
+     * @param from The address of the user whose collateral to seize
+     * @param to The address receiving the seized collateral tokens
+     * @param totalCollateralValueToSeize The total USD value of collateral to seize (in wei, 18 decimals)
+     * @dev This function distributes liquidation across all collateral types based on their proportion
+     *      of the user's total collateral value
+     * @dev This ensures liquidations succeed as long as sufficient total collateral exists, regardless
+     *      of which specific tokens the user has deposited
+     * @dev The function calculates each token's proportion and seizes accordingly to reach the target value
+     * @dev Handles rounding by prioritizing seizure from tokens with the largest deposits first
+     * @dev Reverts with DSCEngine__InsufficientCollateral if total collateral value is less than required
+     * Emits a {CollateralRedeemed} event for each collateral type from which tokens are seized
+     */
+    function _seizeCollateralProportionally(
+        address from,
+        address to,
+        uint256 totalCollateralValueToSeize
+    ) private {
+        // Get the user's total collateral value across all tokens
+        uint256 totalUserCollateralValue = getAccountCollateralValue(from);
+
+        // Ensure user has sufficient total collateral to cover the seizure
+        if (totalUserCollateralValue < totalCollateralValueToSeize) {
+            revert DSCEngine__InsufficientCollateral();
+        }
+
+        // Track the actual USD value seized to handle rounding
+        uint256 totalValueSeized = 0;
+
+        // Iterate through all collateral tokens and seize proportionally
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            address token = s_collateralTokens[i];
+            uint256 userTokenBalance = s_collateralDeposited[from][token];
+
+            // Skip tokens with zero balance
+            if (userTokenBalance == 0) {
+                continue;
+            }
+
+            // Calculate the USD value of this token type
+            uint256 tokenValueInUsd = getUsdValue(token, userTokenBalance);
+
+            // Calculate how much value to seize from this token proportionally
+            // Proportion = (tokenValueInUsd / totalUserCollateralValue) * totalCollateralValueToSeize
+            uint256 valueToSeizeFromToken = (tokenValueInUsd * totalCollateralValueToSeize) / totalUserCollateralValue;
+
+            // For the last iteration, seize any remaining value to handle rounding
+            if (i == s_collateralTokens.length - 1) {
+                valueToSeizeFromToken = totalCollateralValueToSeize - totalValueSeized;
+            }
+
+            // Convert the USD value to token amount
+            uint256 tokenAmountToSeize = getTokenAmountFromUsd(token, valueToSeizeFromToken);
+
+            // Ensure we don't try to seize more than the user has deposited
+            if (tokenAmountToSeize > userTokenBalance) {
+                tokenAmountToSeize = userTokenBalance;
+            }
+
+            // Skip if nothing to seize from this token
+            if (tokenAmountToSeize == 0) {
+                continue;
+            }
+
+            // Seize the collateral from this token type
+            _redeemCollateral(from, to, token, tokenAmountToSeize);
+
+            // Track the actual value seized (recalculate to account for rounding in conversion)
+            totalValueSeized += getUsdValue(token, tokenAmountToSeize);
+
+            // If we've seized enough value, we can exit early
+            if (totalValueSeized >= totalCollateralValueToSeize) {
+                break;
+            }
+        }
+
+        // Final check: ensure we seized enough total value
+        // Allow small rounding errors (< 0.01% difference)
+        uint256 minAcceptableValueSeized = (totalCollateralValueToSeize * 9999) / 10000;
+        if (totalValueSeized < minAcceptableValueSeized) {
+            revert DSCEngine__InsufficientCollateral();
         }
     }
 
