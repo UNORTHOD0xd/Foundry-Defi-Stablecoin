@@ -23,8 +23,6 @@ This project is part of the [Cyfrin Updraft Advanced Foundry Course](https://upd
 - [Deployment](#deployment)
 - [Security Considerations](#security-considerations)
 - [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
 - [Acknowledgments](#acknowledgments)
 
 ---

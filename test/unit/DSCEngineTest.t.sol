@@ -9,6 +9,7 @@ import {DSCEngine} from "../../src/DSCEngine.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "../../test/mocks/ERC20Mock.sol";
 import {MaliciousToken} from "../../test/mocks/MaliciousToken.sol";
+import {MockV3Aggregator} from "../../test/mocks/MockV3Aggregator.sol";
 
 contract DSCEngineTest is Test {
     DeployDSC deployer;
@@ -287,6 +288,121 @@ contract DSCEngineTest is Test {
     ///////////////////////////////////////
     ///////// Liquidation Tests ///////////
     ///////////////////////////////////////
+
+    /**
+     * @dev This test demonstrates that a valid liquidation can fail if the liquidator
+     *      chooses a collateral token that the user doesn't have enough of, even when
+     *      the user has sufficient total collateral value across all token types.
+     *
+     * Scenario:
+     * 1. User deposits 3 WETH ($6,000) + 5 WBTC ($5,000) = $11,000 total collateral
+     * 2. User mints $5,400 DSC (within safe limits initially)
+     * 3. WETH price crashes from $2000 to $600
+     *    - New collateral value: 3 WETH ($1,800) + 5 WBTC ($5,000) = $6,800
+     *    - Health factor = ($6,800 * 50%) / $5,400 = 0.629 < 1.0 (UNDERCOLLATERALIZED)
+     * 4. Liquidator attempts to liquidate using WETH (wrong choice)
+     *    - Needs: ($2,700 / $600) * 1.1 = 4.95 WETH
+     *    - User only has 3 WETH → LIQUIDATION FAILS with InsufficientCollateral
+     * 5. But liquidation SHOULD work using WBTC:
+     *    - Would need: ($2,700 / $1,000) * 1.1 = 2.97 WBTC
+     *    - User has 5 WBTC → This would succeed
+     *
+     * Bug Impact: Valid liquidations can be blocked, allowing bad debt to accumulate
+     */
+    function testLiquidationFailsWithInsufficientSpecificCollateralDespiteHealthyTotalCollateral() public {
+        // Setup addresses
+        address LIQUIDATOR = makeAddr("liquidator");
+
+        // Give USER both WETH and WBTC
+        ERC20Mock(weth).mint(USER, 3 ether);  // 3 WETH
+        ERC20Mock(wbtc).mint(USER, 5 ether);  // 5 WBTC (using ether as 1e18)
+
+        // Give LIQUIDATOR DSC to perform liquidation
+        ERC20Mock(weth).mint(LIQUIDATOR, 10 ether);
+
+        // === STEP 1: User deposits mixed collateral ===
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(dsce), 3 ether);
+        ERC20Mock(wbtc).approve(address(dsce), 5 ether);
+
+        dsce.depositCollateral(weth, 3 ether);  // 3 WETH @ $2000 = $6,000
+        dsce.depositCollateral(wbtc, 5 ether);  // 5 WBTC @ $1000 = $5,000
+        // Total collateral: $11,000
+
+        // === STEP 2: User mints DSC (just under safe limit) ===
+        // With $11,000 collateral at 200% ratio (50% threshold), max safe mint = $5,500
+        // User mints $5,400 to be slightly safe
+        dsce.mintDSC(5400 ether);
+        vm.stopPrank();
+
+        // Verify user position is initially healthy
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = dsce.getAccountInformation(USER);
+        assertEq(totalDscMinted, 5400 ether);
+        assertEq(collateralValueInUsd, 11000 ether); // $11,000
+
+        // === STEP 3: Crash WETH price to make user undercollateralized ===
+        // Import MockV3Aggregator to manipulate price
+        MockV3Aggregator ethUsdPriceFeedContract = MockV3Aggregator(ethUsdPriceFeed);
+
+        // Crash WETH from $2000 to $600
+        ethUsdPriceFeedContract.updateAnswer(600e8);
+
+        // Verify new collateral value
+        // 3 WETH @ $600 = $1,800
+        // 5 WBTC @ $1000 = $5,000
+        // Total = $6,800
+        (totalDscMinted, collateralValueInUsd) = dsce.getAccountInformation(USER);
+        assertEq(collateralValueInUsd, 6800 ether);
+
+        // Calculate health factor manually to verify undercollateralization
+        // Health factor = (collateralValueInUsd * LIQUIDATION_THRESHOLD / LIQUIDATION_PRECISION) / totalDscMinted
+        // Health factor = ($6,800 * 50 / 100) / $5,400 = $3,400 / $5,400 = 0.629...
+        // Expected: 0.62962962... * 1e18 = 629629629629629629
+        uint256 collateralAdjusted = (collateralValueInUsd * 50) / 100;
+        uint256 expectedHealthFactor = (collateralAdjusted * 1e18) / totalDscMinted;
+        assertLt(expectedHealthFactor, 1e18, "User should be undercollateralized");
+
+        // === STEP 4: Liquidator tries to liquidate using WETH (insufficient) ===
+        vm.startPrank(LIQUIDATOR);
+
+        // Mint and approve DSC for liquidator
+        // Give liquidator enough collateral to mint DSC (at crashed $600 WETH price)
+        // 10 WETH @ $600 = $6,000 collateral → can mint $3,000 DSC max
+        ERC20Mock(weth).approve(address(dsce), 10 ether);
+        dsce.depositCollateralAndMintDSC(weth, 10 ether, 3000 ether);
+        dsc.approve(address(dsce), type(uint256).max);
+
+        // Try to liquidate 50% of debt ($2,700) using WETH as collateral
+        uint256 debtToCover = 2700 ether;
+
+        // Calculate what liquidator would need:
+        // Token amount = $2,700 / $600 = 4.5 WETH
+        // With 10% bonus = 4.5 * 1.1 = 4.95 WETH
+        // But user only has 3 WETH!
+
+        // This should revert with InsufficientCollateral
+        vm.expectRevert(DSCEngine.DSCEngine__InsufficientCollateral.selector);
+        dsce.liquidate(weth, USER, debtToCover);
+
+        vm.stopPrank();
+
+        // === STEP 5: Demonstrate that WBTC liquidation WOULD work ===
+        // If liquidator chose WBTC instead:
+        // Token amount = $2,700 / $1,000 = 2.7 WBTC
+        // With 10% bonus = 2.7 * 1.1 = 2.97 WBTC
+        // User has 5 WBTC - this WOULD succeed!
+
+        // Verify user still has enough WBTC for liquidation
+        uint256 wbtcNeeded = dsce.getTokenAmountFromUsd(wbtc, debtToCover);
+        uint256 wbtcWithBonus = wbtcNeeded + (wbtcNeeded * 10 / 100);
+
+        // User should have enough WBTC
+        (, uint256 userCollateral) = dsce.getAccountInformation(USER);
+        assertGt(5 ether, wbtcWithBonus, "User should have enough WBTC for liquidation");
+
+        // This demonstrates the bug: A valid liquidation is blocked because the liquidator
+        // chose the wrong collateral type, even though the user should be liquidatable
+    }
 
     ///////////////////////////////////////
     ///////// Health Factor Tests /////////
