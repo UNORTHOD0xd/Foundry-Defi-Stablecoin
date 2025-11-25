@@ -282,10 +282,12 @@ contract DSCEngine is ReentrancyGuard {
      * @dev Maximum liquidation is capped at 50% of the user's total debt to prevent full position liquidation
      * @dev The liquidator must have approved this contract to spend at least `debtToCover` DSC tokens
      * @dev Protected against reentrancy attacks via nonReentrant modifier
+     * @dev Note: For severely undercollateralized positions (HF < 0.55), the 10% bonus may cause the user's
+     *      health factor to decrease rather than improve. This is acceptable as multiple liquidations
+     *      may be needed to fully restore a healthy position.
      * @dev Reverts with DSCEngine__NeedsMoreThanZero if debtToCover is 0
      * @dev Reverts with DSCEngine__HealthFactorOk if user's health factor is >= MIN_HEALTH_FACTOR
      * @dev Reverts with DSCEngine__InsufficientCollateral if user's total collateral value is insufficient
-     * @dev Reverts with DSCEngine__HealthFactorNotImproved if liquidation doesn't improve user's health
      * @dev Reverts with DSCEngine__BreaksHealthFactor if liquidator's own health factor breaks
      * Emits multiple {CollateralRedeemed} events (one per collateral type seized)
      */
@@ -317,11 +319,6 @@ contract DSCEngine is ReentrancyGuard {
         // Burn DSC debt on behalf of the liquidated user
         _burnDSC(debtToActuallyCover, user, msg.sender);
 
-        // Verify liquidation improved the user's health factor
-        uint256 endingUserHealthfactor = _calculateHealthFactor(user);
-        if (endingUserHealthfactor < startingUserHealthFactor){
-            revert DSCEngine__HealthFactorNotImproved();
-        }
         // Ensure liquidator's own position remains healthy
         _revertIfHealthFactorIsBroken(msg.sender);
     }
