@@ -323,7 +323,16 @@ contract DSCEngine is ReentrancyGuard {
         _revertIfHealthFactorIsBroken(msg.sender);
     }
 
-    function getHealthFactor() external view {} // funtion yet to be implemented. 
+    /**
+     * @notice Returns the health factor for a given user
+     * @param user The address of the user to query
+     * @return The health factor with 18 decimal precision (1e18 = 1.0)
+     * @dev Returns type(uint256).max if the user has no DSC minted
+     * @dev A health factor below 1e18 indicates the position is liquidatable
+     */
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _calculateHealthFactor(user);
+    }
 
     ///////////////////////////////////////////////////////////////////////////////
     //                      PRIVATE & INTERNAL FUNCTIONS                         //
@@ -610,7 +619,18 @@ contract DSCEngine is ReentrancyGuard {
     function getUsdValue(address token, uint256 amount) public view returns(uint256)
     {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (,int256 price,,,) = priceFeed.latestRoundData();
+        (, int256 price,, uint256 updatedAt,) = priceFeed.latestRoundData();
+
+        // Validate price is positive (Chainlink returns 0 or negative on errors)
+        if (price <= 0) {
+            revert DSCEngine__InvalidPrice();
+        }
+
+        // Ensure price data is fresh (updated within last 3 hours)
+        if (block.timestamp - updatedAt > 3 hours) {
+            revert DSCEngine__StalePrice();
+        }
+
         return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
 
@@ -656,5 +676,83 @@ contract DSCEngine is ReentrancyGuard {
      */
     function getDsc() external view returns (address) {
         return address(I_DSC);
+    }
+
+    /**
+     * @notice Returns the amount of collateral deposited by a user for a specific token
+     * @param user The address of the user to query
+     * @param token The address of the collateral token
+     * @return The amount of collateral deposited (in token's native decimals)
+     */
+    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+        return s_collateralDeposited[user][token];
+    }
+
+    /**
+     * @notice Returns the total amount of DSC minted by a user
+     * @param user The address of the user to query
+     * @return The amount of DSC minted (in wei, 18 decimals)
+     */
+    function getDscMinted(address user) external view returns (uint256) {
+        return s_DSCMinted[user];
+    }
+
+    /**
+     * @notice Returns the liquidation threshold percentage
+     * @return The liquidation threshold (50 = 50%, meaning 200% collateralization required)
+     */
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    /**
+     * @notice Returns the liquidation bonus percentage
+     * @return The liquidation bonus (10 = 10% bonus for liquidators)
+     */
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    /**
+     * @notice Returns the liquidation precision denominator
+     * @return The liquidation precision (100 for percentage calculations)
+     */
+    function getLiquidationPrecision() external pure returns (uint256) {
+        return LIQUIDATION_PRECISION;
+    }
+
+    /**
+     * @notice Returns the minimum health factor required to avoid liquidation
+     * @return The minimum health factor (1e18 = 1.0)
+     */
+    function getMinHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
+    }
+
+    /**
+     * @notice Returns the precision used for calculations
+     * @return The precision constant (1e18)
+     */
+    function getPrecision() external pure returns (uint256) {
+        return PRECISION;
+    }
+
+    /**
+     * @notice Returns the additional feed precision for Chainlink price feeds
+     * @return The additional precision (1e10) to normalize 8-decimal prices to 18 decimals
+     */
+    function getAdditionalFeedPrecision() external pure returns (uint256) {
+        return ADDITIONAL_FEED_PRECISION;
+    }
+
+    /**
+     * @notice Calculates the health factor for given debt and collateral values
+     * @param totalDscMinted The total DSC debt amount
+     * @param collateralValueInUsd The total collateral value in USD
+     * @return The calculated health factor with 18 decimal precision
+     * @dev Useful for simulating health factor before making transactions
+     */
+    function calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd) external pure returns (uint256) {
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
     }
 }
