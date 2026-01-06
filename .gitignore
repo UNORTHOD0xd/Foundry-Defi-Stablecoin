@@ -13,7 +13,3 @@ docs/
 # Dotenv file
 .env
 
-# Testing and audit documentation
-BUG_CATCHING_TEST_PLAN.md
-TEST_EXPANSION_PLAN.md
-SECURITY_AUDIT_REPORT.md
