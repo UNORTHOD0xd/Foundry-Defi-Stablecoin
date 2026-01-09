@@ -42,6 +42,12 @@
 //    Avoids wasting fuzz runs on calls that do nothing meaningful.
 //    bound() can return 0 when max is 0 (user has no collateral to redeem).
 //
+// 7. DERIVED BOUNDS FROM PROTOCOL RULES - Calculating valid ranges
+//    maxDscToMint = (collateralValueInUsd / 2) - totalDscMinted
+//    Instead of arbitrary bounds, derive them from protocol constraints.
+//    Uses int256 to handle cases where the result could be negative
+//    (user already over-minted relative to collateral).
+//
 //////////////////////////////////////////////////////////////////////////////
 
 pragma solidity ^0.8.19;
@@ -67,6 +73,24 @@ contract Handler is Test {
         address[] memory collateralTokens = dsce.getCollateralTokens();
         weth = ERC20Mock(collateralTokens[0]);
         wbtc = ERC20Mock(collateralTokens[1]);
+    }
+
+    function mintDsc(uint256 amount) public {
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = dsce.getAccountInformation(msg.sender);
+
+        int256 maxDscToMint = (int256(collateralValueInUsd) / 2) - int256(totalDscMinted);
+        if (maxDscToMint < 0) {
+            return;
+        }
+        amount = bound(amount, 0, uint256(maxDscToMint));
+        if (amount ==0) {
+            return;
+        }
+        
+        vm.startPrank(msg.sender);
+        dsce.mintDSC(amount);
+        vm.stopPrank();
+
     }
 
     function depositCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
