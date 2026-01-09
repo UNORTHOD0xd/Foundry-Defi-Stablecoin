@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// Handler is going to narrow down the way we call functions
 
 //////////////////////////////////////////////////////////////////////////////
 //                            HANDLER NOTES                                 //
@@ -34,6 +33,15 @@
 //    Using uint96.max instead of uint256.max prevents overflow in USD
 //    calculations when multiplying by price (e.g., 2000e8 for ETH).
 //
+// 5. QUERYING STATE FOR BOUNDS - Getting valid ranges from protocol
+//    maxCollateralToRedeem = dsce.getCollateralBalanceOfUser(...)
+//    Instead of guessing bounds, query actual state to ensure valid inputs.
+//
+// 6. EARLY RETURN - Skip calls that would be no-ops
+//    if (amountCollateral == 0) { return; }
+//    Avoids wasting fuzz runs on calls that do nothing meaningful.
+//    bound() can return 0 when max is 0 (user has no collateral to redeem).
+//
 //////////////////////////////////////////////////////////////////////////////
 
 pragma solidity ^0.8.19;
@@ -59,9 +67,7 @@ contract Handler is Test {
         address[] memory collateralTokens = dsce.getCollateralTokens();
         weth = ERC20Mock(collateralTokens[0]);
         wbtc = ERC20Mock(collateralTokens[1]);
-    } 
-
-    // redeem collateral <-
+    }
 
     function depositCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
         ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
@@ -71,6 +77,18 @@ contract Handler is Test {
         collateral.mint(msg.sender, amountCollateral);
         collateral.approve(address(dsce), amountCollateral);
         dsce.depositCollateral(address(collateral), amountCollateral);
+        vm.stopPrank();
+    }
+
+    function redeemCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
+        ERC20Mock collateral = _getCollateralFromSeed(collateralSeed);
+        uint256 maxCollateralToRedeem = dsce.getCollateralBalanceOfUser(address(collateral),
+        msg.sender);
+        amountCollateral = bound(amountCollateral, 0, maxCollateralToRedeem);
+        if (amountCollateral == 0) {
+            return;
+        }
+        dsce.redeemCollateral(address(collateral), amountCollateral);
     }
 
     function _getCollateralFromSeed(uint256 collateralSeed) private view returns (ERC20Mock)
