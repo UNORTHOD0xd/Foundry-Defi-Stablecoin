@@ -29,7 +29,7 @@ import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-
+import {OracleLib} from "./libraries/OracleLib.sol";
 /** @title Decentralized Stable Coin (DSC) Engine
  * @author unorthod0xd
  * @notice This contract is the core of the Decentralized Stable Coin system.
@@ -60,6 +60,11 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__InsufficientCollateral();
     error DSCEngine__InsufficientDSCMinted();
     error DSCEngine__InsufficientCollateralDeposited();
+
+    ///////////////////////////////////////////////////////////////////////////////
+    //                                  TYPES                                    //
+    ///////////////////////////////////////////////////////////////////////////////
+    using OracleLib for AggregatorV3Interface;
 
     ///////////////////////////////////////////////////////////////////////////////
     //                             STATE VARIABLES                               //
@@ -573,7 +578,7 @@ contract DSCEngine is ReentrancyGuard {
         }
 
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (, int256 price,, uint256 updatedAt,) = priceFeed.latestRoundData();
+        (, int256 price,, uint256 updatedAt,) = priceFeed.staleCheckLatestRoundData();
 
         // Validate price is positive (Chainlink returns 0 or negative on errors)
         if (price <= 0) {
@@ -619,7 +624,7 @@ contract DSCEngine is ReentrancyGuard {
     function getUsdValue(address token, uint256 amount) public view returns(uint256)
     {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (, int256 price,, uint256 updatedAt,) = priceFeed.latestRoundData();
+        (, int256 price,, uint256 updatedAt,) = priceFeed.staleCheckLatestRoundData();
 
         // Validate price is positive (Chainlink returns 0 or negative on errors)
         if (price <= 0) {
@@ -743,6 +748,14 @@ contract DSCEngine is ReentrancyGuard {
      */
     function getAdditionalFeedPrecision() external pure returns (uint256) {
         return ADDITIONAL_FEED_PRECISION;
+    }
+
+    /**
+     * @notice Returns the price feed for the collateral token 
+     * @return The price of the collateral token in terms of USD
+     */
+    function getCollateralTokenPriceFeed(address token) external view returns (address) {
+        return s_priceFeeds[token];
     }
 
     /**

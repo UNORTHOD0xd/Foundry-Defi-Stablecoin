@@ -40,6 +40,7 @@ import {DecentralizedStableCoin} from "../../src/DecentralizedStableCoin.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Handler} from "./Handlers.T.sol";
+import {console} from "forge-std/console.sol";
 
 contract OpenInvariantsTest is StdInvariant, Test {
     DeployDSC deployer;
@@ -69,7 +70,15 @@ contract OpenInvariantsTest is StdInvariant, Test {
         uint256 wethValue = dsce.getUsdValue(weth, totalWethDeposited);
         uint256 wbtwValue = dsce.getUsdValue(wbtc, totalBtcDeposited);
 
+        console.log("times mint called", handler.timeMintIsCalled());
+
         assert(wethValue + wbtwValue >= totalSupply);
     }
 
+    function invariant_gettersShouldNotRevert() public view {
+        // dsce.getAccountCollateralValue(user);
+        // dsce.getAccountInformation(user);
+        // dsce.getAccountCollateralValue();
+
+    }
 }
